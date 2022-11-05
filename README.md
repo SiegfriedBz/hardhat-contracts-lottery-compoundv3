@@ -1,31 +1,23 @@
-# Sample Hardhat Project
+# Decentralized No Loss Lottery 
 
-This project demonstrates a basic Hardhat use case. It comes with a sample contract, a test for that contract, and a script that deploys that contract.
+A sample Lottery contract with CompoundV3 USDC Lending
 
+This contract is for creating an untamperable decentralized Lottery smart contract
 
-// For running Staging tests on Goerli we need:
-// 1. Get our SubId for ChainLink VRF
-https://vrf.chain.link/
-//// => GOERLI_LINK_SUBSCRIPTION_ID
-// 2. Deploy our contract using the SubId
-// -> yarn hardhat deploy --network goerli
-// 3. Register the contract with ChainLink VRF & its SubId
-// -> Set as VRF consumer the deployed contract address
-// 4. Register the contract with ChainLink Keepers
-https://automation.chain.link/
-// 5. Run Staging Tests
-// -> yarn hardhat test --network goerli
+This implements Chainlink oracles and CompoundV3
+1. Chainlink VRF v2 to pick a random number
+2. Chainlink Keeper to call the function to pick a Winner
+3. CompoundV3 to lend USDC
 
-CHAINLINK GOERLI 0x326C977E6efc84E512bB9C30f76E30c160eD06FB
+Player can enter Lottery by:
+1. transfering USDC (lotteryTicketPrice) to start lending
+2. sending ETH (lotteryFee) to pay the Lottery
 
+Player gets 1 Lottery Token (LTK) by entering Lottery
 
-
-Try running some of the following tasks:
+The deployment of the Lottery contract triggers the deployment of ERC20 Lottery Token (LTK) contract.
 
 ```shell
-npx hardhat help
-npx hardhat test
-REPORT_GAS=true npx hardhat test
-npx hardhat node
-npx hardhat run scripts/deploy.js
+yarn hardhat help
+yarn hardhat deploy --network goerli
 ```
