@@ -62,6 +62,8 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     uint256 private immutable i_initLTKAmount; // number of LTK minted during LTK deployment
     uint256 private immutable i_interval; // Lottery & ChainLink Keepers
     uint256 private immutable i_intervalWithdraw; // to automate OPEN_TO_WITHDRAW -> OPEN_TO_PLAY switch
+    uint256 immutable i_MAX_INT = 2**256 - 1;
+    uint256 private s_endPlayTime;
     uint256 private s_endWithDrawTime;
     uint256 private s_lastTimeStamp;
     uint256 private s_newPrize;
@@ -94,9 +96,8 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     /* Events */
     event LotteryEntered(address indexed player);
     event SupplyCompoundDone(uint256 indexed amount);
-    event CompoundWithdrawRequested();
-    event SwitchToCalculating(uint256 indexed timeToPlay);
     event CompoundWithdrawDone();
+    event SwitchToCalculating(uint256 indexed timeToPlay);
     event RandomWinnerRequested(uint256 indexed requestId);
     event WinnerPicked(
         address indexed s_newWinner,
@@ -125,7 +126,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     constructor(
         uint256 _lotteryFee, // ETH
         uint256 _lotteryTicketPrice, // USDC
-        uint256 _interval,
+        uint256 _interval, // for UpKeep #01
         uint256 _intervalWithdraw, // for UpKeep #02
         address _vrfCoordinator,
         bytes32 _gasLane,
@@ -207,6 +208,8 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
             // add to supply: (current First) Player TicketPrice + All previous Lottery runs deposits from active Players (still holding USDC in Lottery & LTK)
             amountToSupply = lotteryUSDCBalance;
             s_isFirstPlayer = false;
+            // set s_endPlayTime for upKeep01
+            s_endPlayTime = block.timestamp + i_interval;
         } else {
             // add to supply: 1 TicketPrice (current Player)
             amountToSupply = i_lotteryTicketPrice;
@@ -319,7 +322,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
         // path 01
         if (keccak256(checkData) == keccak256(hex"01")) {
             bool isOPEN_TO_PLAY = (s_lotteryState == LotteryState.OPEN_TO_PLAY);
-            bool timePassed = (block.timestamp - s_lastTimeStamp) > i_interval;
+            bool timePassed = block.timestamp > s_endPlayTime;
             bool hasPlayer = (s_players.length > 0);
             bool isFunded = (address(this).balance > 0);
             upkeepNeeded = (isOPEN_TO_PLAY &&
@@ -362,6 +365,8 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
         }
         // path 01
         if (keccak256(performData) == keccak256(hex"01")) {
+            // reset s_endPlayTime to prevent checkUpKeep01 to return true before next run
+            s_endPlayTime = i_MAX_INT;
             // switch LotteryState OPEN_TO_PLAY => CALCULATING
             s_lotteryState = LotteryState.CALCULATING;
             // request the random number from ChainLink VRF
@@ -375,7 +380,6 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
             // call Coumpound to transfer all available USDC => Lottery
             withdrawfromCompound();
             emit RandomWinnerRequested(requestId);
-            emit CompoundWithdrawRequested();
             emit SwitchToCalculating(block.timestamp);
         }
         // path 02
@@ -477,6 +481,22 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
      */
     function getInterval() external view returns (uint256) {
         return i_interval;
+    }
+
+    /**
+     * @notice Getter for front end
+     * returns the current Lottery round endPlayTime
+     */
+    function getEndPlayTime() external view returns (uint256) {
+        return s_endPlayTime;
+    }
+
+    /**
+     * @notice Getter for front end
+     * returns the current Lottery round endWithDrawTime
+     */
+    function getEndWithDrawTime() external view returns (uint256) {
+        return s_endWithDrawTime;
     }
 
     /**
@@ -617,27 +637,6 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
         }("");
         if (!success) {
             revert Lottery__AdminWithdrawETHFailed();
-        }
-    }
-
-    /**
-     * @notice function for Admin
-     * Emergency. --> Trade-off: need to trust Admin.
-     * transfer all available USDC from Compound => Lottery
-     * /!\ transfer Lottery USDC to Admin
-     */
-    function adminWithdrawUSDC() external onlyOwner {
-        uint128 availableUSDC = getLotteryUSDCBalanceOnCompound();
-        if (availableUSDC != 0) {
-            comet.withdraw(address(usdc), availableUSDC);
-        }
-        s_isFirstPlayer = true;
-        uint256 lotteryUSDCBalance = getLotteryUSDCBalance();
-        if (lotteryUSDCBalance != 0) {
-            bool success = usdc.transfer(msg.sender, lotteryUSDCBalance);
-            if (!success) {
-                revert Lottery__AdminWithdrawUSDCFailed();
-            }
         }
     }
 

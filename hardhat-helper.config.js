@@ -7,8 +7,8 @@ const networkConfig = {
     lotteryFee: ethers.utils.parseEther("0.001"), // 0.001 ETH
     lotteryTicketPrice: ethers.utils.parseUnits("10", 6), // 10 USDC
     initLTKAmount: ethers.utils.parseEther("10000"), // 10'000 LTK minted on deployment
-    interval: "5000",
-    intervalWithdraw: "7500",
+    interval: "600",
+    intervalWithdraw: "300",
     // link_VrfCoordinatorV2_Address will get itfrom Mock
     link_GasLane:
       "0x79d3d8832d904592c0bf9818b621522c988bb8b0c05cdc3b15aea1b6e8db0c15", // same as goerli
@@ -24,8 +24,8 @@ const networkConfig = {
     lotteryFee: ethers.utils.parseEther("0.001"), // 0.001 ETH
     lotteryTicketPrice: ethers.utils.parseUnits("10", 6), // 10 USDC
     initLTKAmount: ethers.utils.parseEther("10000"), // 10'000 LTK minted on deployment
-    interval: "5000",
-    intervalWithdraw: "7500",
+    interval: "600",
+    intervalWithdraw: "300",
     link_VrfCoordinatorV2_Address: "0x2Ca8E0C643bDe4C2E08ab1fA0da3401AdAD7734D",
     link_GasLane:
       "0x79d3d8832d904592c0bf9818b621522c988bb8b0c05cdc3b15aea1b6e8db0c15", // bytes32 _gasLane KeyHash
