@@ -54,7 +54,8 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     /* Type Declaration */
     enum LotteryState {
         OPEN_TO_PLAY,
-        CALCULATING, // requesting a random number from Chainlink VRF + withdrawing Lottery USDC from Compound
+        CALCULATING_WINNER_ADDRESS, // requesting a random number from Chainlink VRF + withdrawing Lottery USDC from Compound
+        CALCULATING_WINNER_GAINS,
         OPEN_TO_WITHDRAW
     }
 
@@ -98,12 +99,16 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     /* Events */
     event LotteryEntered(address indexed player);
     event SupplyCompoundDone(uint256 indexed amount);
-    event CompoundWithdrawDone();
-    event SwitchToCalculating(uint256 indexed timeToPlay);
+    event CompoundWithdrawRequestDone();
+    event SwitchToCalculatingWinnerAddress(
+        uint256 indexed timeToGetWinnerAddress
+    );
     event RandomWinnerRequested(uint256 indexed requestId);
+    event WinnerAddressPicked(address newWinner);
+    event SwitchToCalculatingWinnerGains(uint256 indexed timeToGetWinnerGains);
     event WinnerPicked(
-        address indexed s_newWinner,
-        uint256 indexed s_newPrize,
+        address indexed newWinner,
+        uint256 indexed newPrize,
         uint256 indexed winDate
     );
     event SwitchToOpenToWithDraw(uint256 indexed timeToWithDraw);
@@ -242,16 +247,16 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     }
 
     /**
-     * @notice function called by this.performUpkeep() path 01, when switching Lottery state from OPEN_TO_PLAY => CALCULATING (requesting a random number from Chainlink VRF)
+     * @notice function called by this.performUpkeep() path 01, when switching Lottery state from OPEN_TO_PLAY => CALCULATING_WINNER_ADDRESS (requesting a random number from Chainlink VRF)
      * transfer all available USDC on Compound => Lottery
      * reset s_isFirstPlayer for next Lottery round
-     * note: when this.withdrawfromCompound() is called, Lottery is in CALCULATING state
+     * note: when this.withdrawfromCompound() is called, Lottery is in CALCULATING_WINNER_ADDRESS state
      */
     function withdrawfromCompound() internal {
         uint128 availableUSDC = getLotteryUSDCBalanceOnCompound();
         comet.withdraw(address(usdc), availableUSDC);
         s_isFirstPlayer = true;
-        emit CompoundWithdrawDone();
+        emit CompoundWithdrawRequestDone();
     }
 
     /**
@@ -301,7 +306,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     /**
      * @dev function called by the ChainLink Keeper ("Automation") nodes
      * ChainLink Keeper look for "upkeepNeeded" to return true
-     * 2 possible paths
+     * 3 possible paths
      * -I. path 01
      * -- To return true the following is needed
      * ---1. Lottery state == OPEN_TO_PLAY
@@ -309,6 +314,10 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
      * ---3. Lottery has >= 1player, and Lottery is funded
      * ---4. ChainLink subscription has enough LINK
      * -II. path 02
+     * ---1. Lottery state == CALCULATING_WINNER_GAINS
+     * ---2.
+     * ---3.
+     * -II. path 03
      * -- To return true the following is needed
      * ---1. Lottery state == OPEN_TO_WITHDRAW
      * ---2. Lottery Time interval to WithDraw has Passed
@@ -332,7 +341,21 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
             performData = checkData;
         }
         // path 02
+        // check if is time to calculate gains & if widthdraw from Coumpound has been mined
         if (keccak256(checkData) == keccak256(hex"02")) {
+            bool isCALCULATING_WINNER_GAINS = (s_lotteryState ==
+                LotteryState.CALCULATING_WINNER_GAINS);
+            bool lotteryUSDCBalanceIsNOTNull = (getLotteryUSDCBalance() > 0);
+            bool lotteryUSDCBalanceOnCompoundIsNull = (getLotteryUSDCBalanceOnCompound() ==
+                    0);
+            upkeepNeeded = (isCALCULATING_WINNER_GAINS &&
+                lotteryUSDCBalanceIsNOTNull &&
+                lotteryUSDCBalanceOnCompoundIsNull);
+            performData = checkData;
+        }
+
+        // path 03
+        if (keccak256(checkData) == keccak256(hex"03")) {
             bool isOPEN_TO_WITHDRAW = (s_lotteryState ==
                 LotteryState.OPEN_TO_WITHDRAW);
             bool timeToWithDrawPassed = (block.timestamp >= s_endWithDrawTime);
@@ -343,16 +366,21 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
 
     /**
      * @dev function called by the ChainLink Keeper ("Automation") nodes when checkUpkeep() returned true.
-     * 2 possible paths
+     * 3 possible paths
      * If upkeepNeeded is true:
      * -I. from path 01:
      * --I.1. Lottery calls Coumpound to transfer all available USDC => Lottery
      * --I.2. update s_endPlayTime to prevent checkUpKeep path 01 to return true before next run
      * --I.3. a request for randomness is made to ChainLink VRF
-     * --I.4. LotteryState switch => CALCULATING
+     * --I.4. LotteryState switch => CALCULATING_WINNER_ADDRESS
+     *
      * -II. from path 02:
-     * --II.1 LotteryState switch => OPEN_TO_PLAY
-     * --II.2 Supply Coumpound with ALL Lottery USDC balance to start generating interests
+     * --II.1
+     * --II.2
+     *
+     * -III. from path 03:
+     * --III.1 LotteryState switch => OPEN_TO_PLAY
+     * --III.2 Supply Coumpound with ALL Lottery USDC balance to start generating interests
      */
     function performUpkeep(bytes memory performData) external override {
         // upkeep revalidation whatever the path
@@ -365,14 +393,16 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
             );
         }
         // path 01
+        // GET Winner ADDRESS
         if (keccak256(performData) == keccak256(hex"01")) {
             // call Coumpound to transfer all available USDC => Lottery
             withdrawfromCompound();
             // update s_endPlayTime
             s_endPlayTime = i_MAX_INT;
-            // switch LotteryState OPEN_TO_PLAY => CALCULATING
-            s_lotteryState = LotteryState.CALCULATING;
+            // switch LotteryState OPEN_TO_PLAY => CALCULATING_WINNER_ADDRESS
+            s_lotteryState = LotteryState.CALCULATING_WINNER_ADDRESS;
             // request the random number from ChainLink VRF
+            // to fulffill this request, the ChainLink nodes will call this.fulfillRandomWords()
             uint256 requestId = i_vrfCoordinator.requestRandomWords(
                 i_gasLane,
                 i_subscriptionId,
@@ -380,12 +410,43 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
                 i_callbackGasLimit,
                 NUMWORDS
             );
-
             emit RandomWinnerRequested(requestId);
-            emit SwitchToCalculating(block.timestamp);
+            emit SwitchToCalculatingWinnerAddress(block.timestamp);
         }
+
         // path 02
+        // Get Winner GAINS
         if (keccak256(performData) == keccak256(hex"02")) {
+            // set Winner GAINS
+            uint256 lotteryBaseUSDCValue = s_totalNumTickets *
+                i_lotteryTicketPrice; // total current USDC deposit withOut interests
+            uint256 lotteryCurrentUSDCBalance = getLotteryUSDCBalance(); // with interests
+            // transfer GAINS to Winner if GAINS > 0
+            if (lotteryCurrentUSDCBalance > lotteryBaseUSDCValue) {
+                s_newPrize = lotteryCurrentUSDCBalance - lotteryBaseUSDCValue;
+                bool success = usdc.transfer(s_newWinner, s_newPrize);
+                if (!success) {
+                    revert Lottery__TransferGainsToWinnerFailed();
+                }
+            } else {
+                s_newPrize = 0;
+            }
+            // reset Players array
+            s_players = new address[](0);
+            // reset newWinner address
+            address currentWinner = s_newWinner;
+            s_newWinner = address(0);
+            // switch LotteryState CALCULATING_WINNER_GAINS => OPEN_TO_WITHDRAW
+            s_lotteryState = LotteryState.OPEN_TO_WITHDRAW;
+            // set next endWithDrawTime
+            s_endWithDrawTime = block.timestamp + i_intervalWithdraw;
+            emit WinnerPicked(currentWinner, s_newPrize, block.timestamp);
+            emit SwitchToOpenToWithDraw(block.timestamp);
+        }
+
+        // path 03
+        // Set new Lottery round
+        if (keccak256(performData) == keccak256(hex"03")) {
             // switch LotteryState OPEN_TO_WITHDRAW => OPEN_TO_PLAY
             s_lotteryState = LotteryState.OPEN_TO_PLAY;
             // supply Coumpound with ALL Lottery USDC balance
@@ -402,7 +463,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
      * 2. set Winner GAINS
      * 3. transfer USDC GAINS to Winner
      * 4. reset Players array
-     * 5. switch LotteryState CALCULATING => OPEN_TO_WITHDRAW
+     * 5. switch LotteryState CALCULATING_WINNER_ADDRESS => CALCULATING_WINNER_GAINS
      * 6. set next end of WithDraw Time for this round
      * note: all Players (including Winner) keep their USDC (all without gains) in Lottery for next run. Also, all Players (including Winner) keep their Lottery Tokens until they withdraw all their USDC.
      */
@@ -415,28 +476,10 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
         address newWinner = s_players[indexOfWinner];
         s_newWinner = newWinner;
         s_winners.push(newWinner);
-        s_lastTimeStamp = block.timestamp;
-        // set Winner GAINS
-        uint256 lotteryBaseUSDCValue = s_totalNumTickets * i_lotteryTicketPrice; // withOut interests
-        uint256 lotteryCurrentUSDCBalance = getLotteryUSDCBalance(); // with interests
-        // transfer GAINS to Winner if GAINS > 0
-        if (lotteryCurrentUSDCBalance > lotteryBaseUSDCValue) {
-            s_newPrize = lotteryCurrentUSDCBalance - lotteryBaseUSDCValue;
-            bool success = usdc.transfer(newWinner, s_newPrize);
-            if (!success) {
-                revert Lottery__TransferGainsToWinnerFailed();
-            }
-        } else {
-            s_newPrize = 0;
-        }
-        // reset Players array
-        s_players = new address[](0);
-        // switch LotteryState CALCULATING => OPEN_TO_WITHDRAW
-        s_lotteryState = LotteryState.OPEN_TO_WITHDRAW;
-        // set next endWithDrawTime
-        s_endWithDrawTime = block.timestamp + i_intervalWithdraw;
-        emit WinnerPicked(s_newWinner, s_newPrize, block.timestamp);
-        emit SwitchToOpenToWithDraw(block.timestamp);
+        // switch LotteryState CALCULATING_WINNER_ADDRESS => CALCULATING_WINNER_GAINS
+        s_lotteryState = LotteryState.CALCULATING_WINNER_GAINS;
+        emit WinnerAddressPicked(s_newWinner);
+        emit SwitchToCalculatingWinnerGains(block.timestamp);
     }
 
     /* View/Pure functions */
