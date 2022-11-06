@@ -7,7 +7,8 @@ This contract is for creating an untamperable decentralized Lottery smart contra
 This implements Chainlink oracles and CompoundV3
 1. Chainlink VRF v2 to pick a random number
 2. Chainlink Keeper to call the function to pick a Winner
-3. CompoundV3 to lend USDC
+3. Chainlink Keeper to wait for USDC funds to be on Lottery after withdrawal from Coumpound
+4. CompoundV3 to lend USDC
 
 Player can enter Lottery by:
 1. transfering USDC to start lending
