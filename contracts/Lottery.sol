@@ -40,13 +40,14 @@ import "./interfaces/IComet.sol";
  * @dev This implements CompoundV3, and Chainlink VRF v2 & Chainlink Keeper ("Automation")
  * @notice CompoundV3 to lend USDC and generate gains
  * @notice Chainlink VRF will pick a random number
- * @notice Chainlink Keeper has 2 roles:
- * 1. will call the function to pick a Winner, when the Lottery is in OPEN_TO_PLAY state
- * 2. will set the time during which Players can withdraw their funds, after a Lottery run
+ * @notice Chainlink Keeper has 3 roles:
+ * 1. will call the function to pick a Winner
+ * 2. will call the function to calculate and transfer Winner Gains
+ * 3. will set the time during which Players can withdraw their funds
  * @notice Player can enter Lottery by:
  * 1. transfering USDC (lotteryTicketPrice) to start lending
  * 2. sending ETH (lotteryFee) to pay the Lottery
- * @notice Player gets 1 Lottery Token (LTK) by entering Lottery.
+ * @notice Player gets 1 Lottery Token (LTK) by entering Lottery
  * @notice When a Player withdraws its USDC, he transfers all its LTK to Lottery
  */
 
@@ -55,16 +56,16 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     enum LotteryState {
         OPEN_TO_PLAY,
         CALCULATING_WINNER_ADDRESS, // requesting a random number from Chainlink VRF + withdrawing Lottery USDC from Compound
-        CALCULATING_WINNER_GAINS,
-        OPEN_TO_WITHDRAW
+        CALCULATING_WINNER_GAINS, // calculating Winner Gains, after random number request fullfilled & after Lottery USDC withdrawal from Compound successful
+        OPEN_TO_WITHDRAW // to give Players the opportunity to withdraw their USDC deposit, between 2 Lottery rounds
     }
 
     /* State Variables */
     // Lottery Variables
     uint256 private immutable i_lotteryFee; // ETH 18 decimals
     uint256 private immutable i_lotteryTicketPrice; // USDC 6 decimals
-    uint256 private immutable i_interval; // Lottery & ChainLink Keepers
-    uint256 private immutable i_intervalWithdraw; // to automate OPEN_TO_WITHDRAW -> OPEN_TO_PLAY switch
+    uint256 private immutable i_interval; // time interval to play. used by ChainLink Keepers to automate switch OPEN_TO_PLAY -> CALCULATING_WINNER_ADDRESS, call the ChainLink VRF, pick the Winner Address and switch CALCULATING_WINNER_ADDRESS => CALCULATING_WINNER_GAINS
+    uint256 private immutable i_intervalWithdraw; // time interval for Players to withdraw deposits. used by ChainLink Keepers to automate OPEN_TO_WITHDRAW -> OPEN_TO_PLAY switch
     uint256 immutable i_MAX_INT = 2**256 - 1;
     uint256 private s_endPlayTime;
     uint256 private s_endWithDrawTime;
@@ -227,7 +228,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
 
     /**
      * @notice function can be called by:
-     * 1. this.performUpkeep() path 02 => when a new Lottery round starts, all Lottery USDC balance is used to supply Compound
+     * 1. this.performUpkeep() path 03 => when a new Lottery round starts, all Lottery USDC balance is used to supply Compound
      * 2. admin call on this.adminApproveAndSupplyCompound(), to allow admin to fund Lottery/Compound (without being a Player)
      * => both "1." and "2." will approve & supply Compound with ALL current Lottery USDC balance
      */
@@ -314,9 +315,10 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
      * ---3. Lottery has >= 1player, and Lottery is funded
      * ---4. ChainLink subscription has enough LINK
      * -II. path 02
+     * -- To return true the following is needed
      * ---1. Lottery state == CALCULATING_WINNER_GAINS
-     * ---2.
-     * ---3.
+     * ---2. Lottery USDC Balance Is > 0
+     * ---3. Lottery USDC Balance On Compound == Null (withdrawal from Compound => Lottery successful)
      * -II. path 03
      * -- To return true the following is needed
      * ---1. Lottery state == OPEN_TO_WITHDRAW
@@ -341,7 +343,6 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
             performData = checkData;
         }
         // path 02
-        // check if is time to calculate gains & if widthdraw from Coumpound has been mined
         if (keccak256(checkData) == keccak256(hex"02")) {
             bool isCALCULATING_WINNER_GAINS = (s_lotteryState ==
                 LotteryState.CALCULATING_WINNER_GAINS);
@@ -353,7 +354,6 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
                 lotteryUSDCBalanceOnCompoundIsNull);
             performData = checkData;
         }
-
         // path 03
         if (keccak256(checkData) == keccak256(hex"03")) {
             bool isOPEN_TO_WITHDRAW = (s_lotteryState ==
@@ -372,14 +372,15 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
      * --I.1. Lottery calls Coumpound to transfer all available USDC => Lottery
      * --I.2. update s_endPlayTime to prevent checkUpKeep path 01 to return true before next run
      * --I.3. a request for randomness is made to ChainLink VRF
-     * --I.4. LotteryState switch => CALCULATING_WINNER_ADDRESS
-     *
+     * --I.4. LotteryState switch OPEN_TO_PLAY => CALCULATING_WINNER_ADDRESS
      * -II. from path 02:
-     * --II.1
-     * --II.2
-     *
+     * --II.1. calculate and transfer Gains to Winner
+     * --II.2. reset Winner address and Players array
+     * --II.3. LotteryState switch CALCULATING_WINNER_GAINS => OPEN_TO_WITHDRAW
+     * --II.4. set next endWithDrawTime: time at which is no more possible for Players to withdraw for this round
+     * --II. note: all Players (including Winner) keep their USDC (all without gains) in Lottery for next run. Also, all Players (including Winner) keep their Lottery Tokens as long as they do not withdraw all their USDC.
      * -III. from path 03:
-     * --III.1 LotteryState switch => OPEN_TO_PLAY
+     * --III.1 LotteryState switch OPEN_TO_WITHDRAW => OPEN_TO_PLAY
      * --III.2 Supply Coumpound with ALL Lottery USDC balance to start generating interests
      */
     function performUpkeep(bytes memory performData) external override {
@@ -393,7 +394,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
             );
         }
         // path 01
-        // GET Winner ADDRESS
+        // Get Winner ADDRESS
         if (keccak256(performData) == keccak256(hex"01")) {
             // call Coumpound to transfer all available USDC => Lottery
             withdrawfromCompound();
@@ -413,13 +414,11 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
             emit RandomWinnerRequested(requestId);
             emit SwitchToCalculatingWinnerAddress(block.timestamp);
         }
-
         // path 02
         // Get Winner GAINS
         if (keccak256(performData) == keccak256(hex"02")) {
             // set Winner GAINS
-            uint256 lotteryBaseUSDCValue = s_totalNumTickets *
-                i_lotteryTicketPrice; // total current USDC deposit withOut interests
+            uint256 lotteryBaseUSDCValue = getLotteryBaseUsdcValue(); // total current USDC deposit withOut interests
             uint256 lotteryCurrentUSDCBalance = getLotteryUSDCBalance(); // with interests
             // transfer GAINS to Winner if GAINS > 0
             if (lotteryCurrentUSDCBalance > lotteryBaseUSDCValue) {
@@ -431,6 +430,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
             } else {
                 s_newPrize = 0;
             }
+
             // reset Players array
             s_players = new address[](0);
             // reset newWinner address
@@ -443,7 +443,6 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
             emit WinnerPicked(currentWinner, s_newPrize, block.timestamp);
             emit SwitchToOpenToWithDraw(block.timestamp);
         }
-
         // path 03
         // Set new Lottery round
         if (keccak256(performData) == keccak256(hex"03")) {
@@ -460,12 +459,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
      * After the request for randomness is made to Chainlink VRF, a Chainlink Node call its own fulfillRandomWords to run off-chain calculation => randomWords.
      * Then, a Chainlink Node call our fulfillRandomWords (on-chain) and pass to it the requestId and the randomWords.
      * 1. set Winner
-     * 2. set Winner GAINS
-     * 3. transfer USDC GAINS to Winner
-     * 4. reset Players array
-     * 5. switch LotteryState CALCULATING_WINNER_ADDRESS => CALCULATING_WINNER_GAINS
-     * 6. set next end of WithDraw Time for this round
-     * note: all Players (including Winner) keep their USDC (all without gains) in Lottery for next run. Also, all Players (including Winner) keep their Lottery Tokens until they withdraw all their USDC.
+     * 2. LotteryState switch CALCULATING_WINNER_ADDRESS => CALCULATING_WINNER_GAINS
      */
     function fulfillRandomWords(
         uint256, /* requestId */
@@ -483,6 +477,16 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     }
 
     /* View/Pure functions */
+
+    /**
+     * @notice Getter
+     * returns the total current USDC deposit withOut interests
+     */
+    function getLotteryBaseUsdcValue() public view returns (uint256) {
+        uint256 lotteryBaseUSDCValue = s_totalNumTickets * i_lotteryTicketPrice;
+        return lotteryBaseUSDCValue;
+    }
+
     /**
      * @notice Getter for front end
      * returns the entrance fee
@@ -538,7 +542,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     }
 
     /**
-     * @notice Getter
+     * @notice Getter for front end
      * returns the total number of active tickets
      */
     function getTotalNumTickets() external view returns (uint256) {
