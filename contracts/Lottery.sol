@@ -22,7 +22,7 @@ error Lottery__AdminWithdrawETHFailed();
 error Lottery__AdminWithdrawUSDCFailed();
 error Lottery__AdminCanNotPerformMyUpkeep();
 
-// LotteryToken LTK ERC20 Mintable
+// LotteryToken LTK ERC20
 import "./LotteryToken.sol";
 // Chainlink VRF v2 - Verifiable Random Function
 import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
@@ -37,13 +37,13 @@ import "./interfaces/IComet.sol";
 /** @title A sample No-Loss Lottery contract with CompoundV3 USDC Lending
  * @author SiegfriedBz
  * @notice This contract is for creating an untamperable decentralized Lottery smart contract
- * @dev This implements CompoundV3, and Chainlink VRF v2 & Chainlink Keeper ("Automation")
+ * @dev This implements CompoundV3, Chainlink VRF v2 & Chainlink Keeper/Automation
  * @notice CompoundV3 to lend USDC and generate gains
- * @notice Chainlink VRF will pick a random number
+ * @notice Chainlink VRF to pick a random number
  * @notice Chainlink Keeper has 3 roles:
- * 1. will call the function to pick a Winner
- * 2. will call the function to calculate and transfer Winner Gains
- * 3. will set the time during which Players can withdraw their funds
+ * 1. call the function to pick a Winner
+ * 2. call the function to calculate and transfer Winner Gains
+ * 3. set the time during which Players can withdraw their funds
  * @notice Player can enter Lottery by:
  * 1. transfering USDC (lotteryTicketPrice) to start lending
  * 2. sending ETH (lotteryFee) to pay the Lottery
@@ -62,10 +62,10 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
 
     /* State Variables */
     // Lottery Variables
-    uint256 private immutable i_lotteryFee; // ETH 18 decimals
+    uint256 private immutable i_lotteryFee; // ETH
     uint256 private immutable i_lotteryTicketPrice; // USDC 6 decimals
-    uint256 private immutable i_interval; // time interval to play. used by ChainLink Keepers to automate switch OPEN_TO_PLAY -> CALCULATING_WINNER_ADDRESS, call the ChainLink VRF, pick the Winner Address and switch CALCULATING_WINNER_ADDRESS => CALCULATING_WINNER_GAINS
-    uint256 private immutable i_intervalWithdraw; // time interval for Players to withdraw deposits. used by ChainLink Keepers to automate OPEN_TO_WITHDRAW -> OPEN_TO_PLAY switch
+    uint256 private immutable i_interval; // time interval to play. used by Chainlink Keepers to automate switch OPEN_TO_PLAY -> CALCULATING_WINNER_ADDRESS, call the ChainLink VRF, pick the Winner Address, and switch CALCULATING_WINNER_ADDRESS => CALCULATING_WINNER_GAINS
+    uint256 private immutable i_intervalWithdraw; // time interval for Players to withdraw deposits. used by Chainlink Keepers to automate OPEN_TO_WITHDRAW -> OPEN_TO_PLAY switch
     uint256 immutable i_MAX_INT = 2**256 - 1;
     uint256 private s_endPlayTime;
     uint256 private s_endWithDrawTime;
@@ -83,13 +83,13 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     // LotteryToken
     LotteryToken public lotteryToken;
 
-    // ChainLink Keepers & VRF config
-    VRFCoordinatorV2Interface private immutable i_vrfCoordinator; // VRF
-    bytes32 private immutable i_gasLane; // VRF
-    uint64 private immutable i_subscriptionId; // VRF
-    uint32 private immutable i_callbackGasLimit; // VRF
-    uint16 private constant REQUEST_CONFIRMATIONS = 3; // VRF
-    uint32 private constant NUMWORDS = 1; // VRF
+    // Chainlink VRF config
+    VRFCoordinatorV2Interface private immutable i_vrfCoordinator;
+    bytes32 private immutable i_gasLane;
+    uint64 private immutable i_subscriptionId;
+    uint32 private immutable i_callbackGasLimit;
+    uint16 private constant REQUEST_CONFIRMATIONS = 3;
+    uint32 private constant NUMWORDS = 1;
 
     // USDC
     ERC20 public usdc;
@@ -135,7 +135,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
         uint256 _lotteryFee, // ETH
         uint256 _lotteryTicketPrice, // USDC
         uint256 _interval, // for Chainlink Keepers UpKeep #01
-        uint256 _intervalWithdraw, // for Chainlink Keepers UpKeep #02
+        uint256 _intervalWithdraw, // for Chainlink Keepers UpKeep path 02
         address _vrfCoordinator,
         bytes32 _gasLane,
         uint64 _subscriptionId,
@@ -184,8 +184,8 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
         playerToNumTickets[msg.sender] += 1;
         s_totalNumTickets += 1;
         s_players.push(msg.sender);
-        lotteryToken.transfer(msg.sender, 10**18); // 1 LTK (18 decimals)
-        // call call USDC to approve Compound & call Compound to supply
+        lotteryToken.transfer(msg.sender, 10**18); // 1 LTK (ERC20, 18 decimals)
+        // call USDC to approve Compound & call Compound to supply
         approveAndSupplyCompound();
         emit LotteryEntered(msg.sender);
     }
@@ -196,7 +196,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
      * 2. Lottery supply Compound
      * 2.1 if Player is 1st Player of this Lottery round
      *  => all current Lottery USDC balance => supply Compound
-     *  => set end of Playing time (s_endPlayTime) for this round, will be checked by Chainlink Keepers on this.checkUpkeep() path 02
+     *  => set end of Playing time (s_endPlayTime) for this round, will be checked by Chainlink Keepers on this.checkUpkeep() path 01
      * 2.2 else => 1 Ticket Price USDC => supply Compound
      */
     function approveAndSupplyCompound() internal {
@@ -213,10 +213,10 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
         uint256 amountToSupply;
         if (s_isFirstPlayer) {
             // if Player was First Player (of this round) to call this.enterLottery()
-            // => add to supply: (current First) Player TicketPrice + All previous Lottery runs deposits from active Players (still holding USDC in Lottery & LTK)
+            // => add to supply: (current First) Player TicketPrice + All previous Lottery runs deposits from active Players (still holding USDC in Lottery & LTK in their wallet)
             amountToSupply = lotteryUSDCBalance;
             s_isFirstPlayer = false;
-            // set s_endPlayTime for this.checkUpkeep() path 02
+            // set s_endPlayTime for this.checkUpkeep() path 01
             s_endPlayTime = block.timestamp + i_interval;
         } else {
             // add to supply: 1 TicketPrice
@@ -228,7 +228,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
 
     /**
      * @notice function can be called by:
-     * 1. this.performUpkeep() path 03 => when a new Lottery round starts, all Lottery USDC balance is used to supply Compound
+     * 1. this.performUpkeep() path 03 => when a Lottery round ends, after Players' witdrawal time, all Lottery USDC balance is used to supply Compound
      * 2. admin call on this.adminApproveAndSupplyCompound(), to allow admin to fund Lottery/Compound (without being a Player)
      * => both "1." and "2." will approve & supply Compound with ALL current Lottery USDC balance
      */
@@ -251,7 +251,6 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
      * @notice function called by this.performUpkeep() path 01, when switching Lottery state from OPEN_TO_PLAY => CALCULATING_WINNER_ADDRESS (requesting a random number from Chainlink VRF)
      * transfer all available USDC on Compound => Lottery
      * reset s_isFirstPlayer for next Lottery round
-     * note: when this.withdrawfromCompound() is called, Lottery is in CALCULATING_WINNER_ADDRESS state
      */
     function withdrawfromCompound() internal {
         uint128 availableUSDC = getLotteryUSDCBalanceOnCompound();
@@ -266,7 +265,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
      * 2. Lottery call USDC => Transfer Player's due USDC from Lottery to Player
      * 3. update totalNumTickets
      * 4. reset Player mapping toNumTickets
-     * note: when this.withdrawfromCompound() is called, Lottery is in OPEN_TO_WITHDRAW state
+     * note: for this.withdrawfromCompound() to be called, Lottery must be in OPEN_TO_WITHDRAW state
      */
     function withdrawFromLottery() public {
         if (s_lotteryState != LotteryState.OPEN_TO_WITHDRAW) {
@@ -305,24 +304,24 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     }
 
     /**
-     * @dev function called by the ChainLink Keeper ("Automation") nodes
-     * ChainLink Keeper look for "upkeepNeeded" to return true
+     * @dev function called by the Chainlink Keepers/Automation nodes
+     * Chainlink Keepers look for "upkeepNeeded" to return true
      * 3 possible paths
      * -I. path 01
-     * -- To return true the following is needed
-     * ---1. Lottery state == OPEN_TO_PLAY
-     * ---2. Lottery Time interval to Play has passed
-     * ---3. Lottery has >= 1player, and Lottery is funded
-     * ---4. ChainLink subscription has enough LINK
+     * To return true the following is needed
+     * --1. Lottery state == OPEN_TO_PLAY
+     * --2. Lottery Time interval to Play has passed
+     * --3. Lottery has >= 1player, and Lottery is funded
+     * --4. ChainLink subscription has enough LINK
      * -II. path 02
-     * -- To return true the following is needed
-     * ---1. Lottery state == CALCULATING_WINNER_GAINS
-     * ---2. Lottery USDC Balance Is > 0
-     * ---3. Lottery USDC Balance On Compound == Null (withdrawal from Compound => Lottery successful)
+     * To return true the following is needed
+     * --1. Lottery state == CALCULATING_WINNER_GAINS
+     * --2. Lottery USDC Balance Is > 0
+     * --3. Lottery USDC Balance On Compound == Null (withdrawal from Compound => Lottery was successful)
      * -II. path 03
-     * -- To return true the following is needed
-     * ---1. Lottery state == OPEN_TO_WITHDRAW
-     * ---2. Lottery Time interval to WithDraw has Passed
+     * To return true the following is needed
+     * --1. Lottery state == OPEN_TO_WITHDRAW
+     * --2. Lottery Time interval to WithDraw has Passed
      */
     function checkUpkeep(bytes memory checkData)
         public
@@ -365,23 +364,23 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     }
 
     /**
-     * @dev function called by the ChainLink Keeper ("Automation") nodes when checkUpkeep() returned true.
+     * @dev function called by the Chainlink Keepers/Automation nodes when checkUpkeep() returned true.
      * 3 possible paths
      * If upkeepNeeded is true:
      * -I. from path 01:
-     * --I.1. Lottery calls Coumpound to transfer all available USDC => Lottery
-     * --I.2. update s_endPlayTime to prevent checkUpKeep path 01 to return true before next run
-     * --I.3. a request for randomness is made to ChainLink VRF
-     * --I.4. LotteryState switch OPEN_TO_PLAY => CALCULATING_WINNER_ADDRESS
+     * --1. Lottery calls Coumpound to transfer all available USDC => Lottery
+     * --2. update s_endPlayTime to prevent checkUpKeep path 01 to return true before next run
+     * --3. a request for randomness is made to ChainLink VRF
+     * --4. LotteryState switch OPEN_TO_PLAY => CALCULATING_WINNER_ADDRESS
      * -II. from path 02:
-     * --II.1. calculate and transfer Gains to Winner
-     * --II.2. reset Winner address and Players array
-     * --II.3. LotteryState switch CALCULATING_WINNER_GAINS => OPEN_TO_WITHDRAW
-     * --II.4. set next endWithDrawTime: time at which is no more possible for Players to withdraw for this round
-     * --II. note: all Players (including Winner) keep their USDC (all without gains) in Lottery for next run. Also, all Players (including Winner) keep their Lottery Tokens as long as they do not withdraw all their USDC.
+     * --1. calculate and transfer Gains to Winner
+     * --2. reset Winner address and Players array
+     * --3. LotteryState switch CALCULATING_WINNER_GAINS => OPEN_TO_WITHDRAW
+     * --4. set next endWithDrawTime: time at which is no more possible for Players to withdraw for this round
+     * --II. note: all Players (including Winner) keep their USDC (all without gains) in Lottery for next run. Also, all Players (including Winner) keep their LTK as long as they do not withdraw their USDC.
      * -III. from path 03:
-     * --III.1 LotteryState switch OPEN_TO_WITHDRAW => OPEN_TO_PLAY
-     * --III.2 Supply Coumpound with ALL Lottery USDC balance to start generating interests
+     * --1. LotteryState switch OPEN_TO_WITHDRAW => OPEN_TO_PLAY
+     * --2. Supply Compound with ALL Lottery USDC balance to start generating interests
      */
     function performUpkeep(bytes memory performData) external override {
         // upkeep revalidation whatever the path
@@ -396,14 +395,14 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
         // path 01
         // Get Winner ADDRESS
         if (keccak256(performData) == keccak256(hex"01")) {
-            // call Coumpound to transfer all available USDC => Lottery
+            // call Compound to transfer all available USDC => Lottery
             withdrawfromCompound();
             // update s_endPlayTime
             s_endPlayTime = i_MAX_INT;
             // switch LotteryState OPEN_TO_PLAY => CALCULATING_WINNER_ADDRESS
             s_lotteryState = LotteryState.CALCULATING_WINNER_ADDRESS;
-            // request the random number from ChainLink VRF
-            // to fulffill this request, the ChainLink nodes will call this.fulfillRandomWords()
+            // request a random number from Chainlink VRF
+            // to fulffill this request, the Chainlink nodes will call this.fulfillRandomWords()
             uint256 requestId = i_vrfCoordinator.requestRandomWords(
                 i_gasLane,
                 i_subscriptionId,
@@ -448,15 +447,15 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
         if (keccak256(performData) == keccak256(hex"03")) {
             // switch LotteryState OPEN_TO_WITHDRAW => OPEN_TO_PLAY
             s_lotteryState = LotteryState.OPEN_TO_PLAY;
-            // supply Coumpound with ALL Lottery USDC balance
+            // supply Compound with ALL Lottery USDC balance
             approveAndSupplyCompoundForALLUsdc();
             emit SwitchToOpenToPlay(block.timestamp);
         }
     }
 
     /**
-     * @dev function called by the ChainLink nodes
-     * After the request for randomness is made to Chainlink VRF, a Chainlink Node call its own fulfillRandomWords to run off-chain calculation => randomWords.
+     * @dev function called by the Chainlink nodes
+     * After the request for randomness is made to Chainlink VRF, the Chainlink Nodes call their own fulfillRandomWords to run off-chain calculation => randomWords.
      * Then, a Chainlink Node call our fulfillRandomWords (on-chain) and pass to it the requestId and the randomWords.
      * 1. set Winner
      * 2. LotteryState switch CALCULATING_WINNER_ADDRESS => CALCULATING_WINNER_GAINS
@@ -480,7 +479,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
 
     /**
      * @notice Getter
-     * returns the total current USDC deposit withOut interests
+     * returns the total current USDC deposit withOut interest
      */
     function getLotteryBaseUsdcValue() public view returns (uint256) {
         uint256 lotteryBaseUSDCValue = s_totalNumTickets * i_lotteryTicketPrice;
